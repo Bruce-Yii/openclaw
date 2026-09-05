@@ -276,8 +276,10 @@ export class SessionManager extends SessionManagerBranching {
       );
     }
     const manager = new SessionManager(cwd ?? header?.cwd ?? process.cwd(), undefined, entries);
-    // Model-context entries are an already selected path, without leaf controls.
-    manager.leafId = manager.appendParentId;
+    manager.adoptSelectedTranscriptPath(
+      manager.appendParentId,
+      [...manager.byId].map(([id, entry]) => [id, entry.parentId]),
+    );
     return manager;
   }
 
