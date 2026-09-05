@@ -139,6 +139,11 @@ export class SessionManager extends SessionManagerBranching {
           first.parentId = parentId;
           prepared.boundedParentIds.set(first.id, first.parentId);
         }
+        // A maintenance branch may cross a reset. Side entries preserve its
+        // explicit ancestry; ordinary appends would normalize onto the old leaf.
+        for (const entry of entries) {
+          entry.appendMode = "side";
+        }
         // Reconstruct with the reader's canonical reset/leaf rules, then retain
         // the bounded reader's ancestry for payloads absent from the loaded view.
         prepared.buildIndex();
@@ -148,6 +153,10 @@ export class SessionManager extends SessionManagerBranching {
         for (const [id, parent] of this.logicalParentsById) {
           prepared.logicalParentsById.set(id, parent);
         }
+        const last = entries.at(-1);
+        const leaf = last
+          ? prepared.appendLeafControl({ targetId: last.id, appendParentId: last.id })
+          : undefined;
         if (persistedBoundaryCount !== undefined) {
           prepared.persistedBoundaryCount =
             persistedBoundaryCount + prepared.getBoundaryCount() - loadedBoundaryCount;
@@ -157,7 +166,7 @@ export class SessionManager extends SessionManagerBranching {
           Object.assign(this, prepared.captureTranscriptView());
         };
         if (publish) {
-          publish(entries, sources, adopt);
+          publish(leaf ? [...entries, leaf] : entries, sources, adopt);
         } else {
           adopt();
         }
@@ -266,7 +275,10 @@ export class SessionManager extends SessionManagerBranching {
         "Persisted legacy session transcripts require doctor/import migration before runtime use",
       );
     }
-    return new SessionManager(cwd ?? header?.cwd ?? process.cwd(), undefined, entries);
+    const manager = new SessionManager(cwd ?? header?.cwd ?? process.cwd(), undefined, entries);
+    // Model-context entries are an already selected path, without leaf controls.
+    manager.leafId = manager.appendParentId;
+    return manager;
   }
 
   /** Synchronously consumes full-fidelity context; its iterator closes with the read snapshot. */
