@@ -14,6 +14,7 @@ import {
 import { clearSecretsRuntimeSnapshotState } from "../../secrets/runtime-state.js";
 import { setupSecretsRuntimeSnapshotTestHooks } from "../../secrets/runtime.test-support.ts";
 import { looksLikeSecretSentinel, resolveSecretSentinel } from "../../secrets/sentinel.js";
+import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 
 const { prepareSecretsRuntimeSnapshot: _prepareHook } = setupSecretsRuntimeSnapshotTestHooks();
 void _prepareHook;
@@ -137,9 +138,20 @@ async function runLocalModelRun(model: string): Promise<void> {
   );
 }
 
+type CompletionAuth = { apiKey?: string; source?: string };
+
+/** Reads the auth captured by the faked provider-egress boundary. */
+function getCompletionAuth(): CompletionAuth | undefined {
+  const args = completeWithPreparedSimpleCompletionModelMock.mock.calls.at(-1) as
+    | unknown[]
+    | undefined;
+  const params = args?.[0] as { auth?: CompletionAuth } | undefined;
+  return params?.auth;
+}
+
 describe("local model run config SecretRef provenance", () => {
   let agentDir = "";
-  let previousEnv: Record<string, string | undefined> = {};
+  let restoreEnv: (() => void) | undefined;
 
   beforeEach(() => {
     agentDir = mkdtempSync(join(tmpdir(), "openclaw-model-run-prov-"));
@@ -148,25 +160,17 @@ describe("local model run config SecretRef provenance", () => {
     // as the runtime source before any command runs). Without this the helper
     // would fall back to the resolved config, exactly like a bootless process.
     setRuntimeConfigSnapshot(structuredClone(hoisted.rawCfg), structuredClone(hoisted.rawCfg));
-    for (const key of [ENV_CONFIG_KEY, ENV_ACCOUNT_KEY, ENV_MISSING_KEY]) {
-      previousEnv[key] = process.env[key];
-    }
-    process.env[ENV_CONFIG_KEY] = CONFIG_KEY_VALUE;
-    process.env[ENV_ACCOUNT_KEY] = ACCOUNT_KEY_VALUE;
-    delete process.env[ENV_MISSING_KEY];
+    restoreEnv = captureEnv([ENV_CONFIG_KEY, ENV_ACCOUNT_KEY, ENV_MISSING_KEY]).restore;
+    setTestEnvValue(ENV_CONFIG_KEY, CONFIG_KEY_VALUE);
+    setTestEnvValue(ENV_ACCOUNT_KEY, ACCOUNT_KEY_VALUE);
+    deleteTestEnvValue(ENV_MISSING_KEY);
     completeWithPreparedSimpleCompletionModelMock.mockClear();
     emitJsonOrTextMock.mockClear();
   });
 
   afterEach(() => {
-    for (const [key, value] of Object.entries(previousEnv)) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
-    previousEnv = {};
+    restoreEnv?.();
+    restoreEnv = undefined;
     clearSecretsRuntimeSnapshotState();
     // Best effort: the persisted auth store may still hold an OS file handle on Windows.
     try {
@@ -191,9 +195,7 @@ describe("local model run config SecretRef provenance", () => {
     await runLocalModelRun("customcfg/test-model");
 
     expect(completeWithPreparedSimpleCompletionModelMock).toHaveBeenCalledTimes(1);
-    const auth = completeWithPreparedSimpleCompletionModelMock.mock.calls[0]?.[0]?.auth as
-      | { apiKey?: string; source?: string }
-      | undefined;
+    const auth = getCompletionAuth();
     expect(auth?.source).toBe("models.providers.customcfg");
     expect(looksLikeSecretSentinel(auth?.apiKey ?? "")).toBe(true);
     expect(resolveSecretSentinel(auth?.apiKey ?? "")).toBe(CONFIG_KEY_VALUE);
@@ -204,9 +206,7 @@ describe("local model run config SecretRef provenance", () => {
     await runLocalModelRun("customacct/test-model");
 
     expect(completeWithPreparedSimpleCompletionModelMock).toHaveBeenCalledTimes(1);
-    const auth = completeWithPreparedSimpleCompletionModelMock.mock.calls[0]?.[0]?.auth as
-      | { apiKey?: string; source?: string }
-      | undefined;
+    const auth = getCompletionAuth();
     expect(auth?.source).toBe("profile:customacct:healthy");
     expect(looksLikeSecretSentinel(auth?.apiKey ?? "")).toBe(true);
     expect(resolveSecretSentinel(auth?.apiKey ?? "")).toBe(ACCOUNT_KEY_VALUE);
@@ -228,9 +228,7 @@ describe("local model run config SecretRef provenance", () => {
     await runLocalModelRun("customacct/test-model");
 
     expect(completeWithPreparedSimpleCompletionModelMock).toHaveBeenCalledTimes(1);
-    const auth = completeWithPreparedSimpleCompletionModelMock.mock.calls[0]?.[0]?.auth as
-      | { apiKey?: string; source?: string }
-      | undefined;
+    const auth = getCompletionAuth();
     expect(auth?.source).toBe("profile:customacct:healthy");
     expect(resolveSecretSentinel(auth?.apiKey ?? "")).toBe(ACCOUNT_KEY_VALUE);
   });

@@ -107,6 +107,9 @@ describe("local model run account secret activation", () => {
 
     const activationOrder = mocks.activateSecretsRuntimeSnapshot.mock.invocationCallOrder[0];
     const authLookupOrder = mocks.acquireSimpleCompletionModelForAgent.mock.invocationCallOrder[0];
+    if (authLookupOrder === undefined) {
+      throw new Error("expected model auth preparation to run after snapshot activation");
+    }
     expect(activationOrder).toBeLessThan(authLookupOrder);
     expect(mocks.releasePreparedModel).toHaveBeenCalledTimes(1);
   });
