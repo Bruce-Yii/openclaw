@@ -39,6 +39,7 @@ import { runCommandWithRuntime } from "../cli-utils.js";
 import { getModelsCommandSecretTargetIds } from "../command-secret-targets.js";
 import { collectOption } from "../program/helpers.js";
 import type { CapabilityEnvelope, CapabilityTransport } from "./metadata.js";
+import { prepareLocalModelRunAccountSecrets } from "./model-local-secrets.js";
 import { emitJsonOrText, formatEnvelopeForText, providerSummaryText } from "./output.js";
 import {
   providerHasGenericConfig,
@@ -202,14 +203,7 @@ async function runModelRun(params: {
         ]
       : params.prompt;
   if (params.transport === "local") {
-    const secretsRuntime = await import("../../secrets/runtime.js");
-    const secretsSnapshot = await secretsRuntime.prepareSecretsRuntimeSnapshot({
-      config: cfg,
-      agentDirs: [resolveAgentDir(cfg, agentId)],
-      includeConfigRefs: false,
-      allowUnavailableSecretOwners: true,
-    });
-    secretsRuntime.activateSecretsRuntimeSnapshot(secretsSnapshot);
+    await prepareLocalModelRunAccountSecrets({ cfg, agentId });
 
     const prepared = await prepareSimpleCompletionModelForAgent({
       cfg,

@@ -89,13 +89,13 @@ describe("local model run account secret activation", () => {
     const capability = new Command();
     registerModelCapabilityCommands(capability);
 
-    await capability.parseAsync(
-      ["model", "run", "--prompt", "hello", "--agent", "ops", "--json"],
-      { from: "user" },
-    );
+    await capability.parseAsync(["model", "run", "--prompt", "hello", "--agent", "ops", "--json"], {
+      from: "user",
+    });
 
     expect(mocks.prepareSecretsRuntimeSnapshot).toHaveBeenCalledWith({
       config: mocks.cfg,
+      assignmentConfig: mocks.cfg,
       agentDirs: ["/tmp/agent-ops"],
       includeConfigRefs: false,
       allowUnavailableSecretOwners: true,

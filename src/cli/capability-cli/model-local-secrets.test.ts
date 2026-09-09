@@ -48,6 +48,7 @@ describe("prepareLocalModelRunAccountSecrets", () => {
       assignmentConfig: cfg,
       agentDirs: ["/tmp/agent-ops"],
       includeConfigRefs: false,
+      allowUnavailableSecretOwners: true,
     });
     expect(mocks.activateSecretsRuntimeSnapshot).toHaveBeenCalledWith({ marker: "snapshot" });
   });

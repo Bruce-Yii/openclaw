@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveApiKeyForProfile } from "../../agents/auth-profiles/oauth.js";
-import { activateSecretsRuntimeSnapshot } from "../../secrets/runtime.js";
 import { clearSecretsRuntimeSnapshotState } from "../../secrets/runtime-state.js";
+import { activateSecretsRuntimeSnapshot } from "../../secrets/runtime.js";
 import {
   asConfig,
   loadAuthStoreWithProfiles,

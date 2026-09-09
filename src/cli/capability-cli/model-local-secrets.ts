@@ -18,6 +18,7 @@ export async function prepareLocalModelRunAccountSecrets(params: {
     assignmentConfig: params.cfg,
     agentDirs: [resolveAgentDir(params.cfg, params.agentId)],
     includeConfigRefs: false,
+    allowUnavailableSecretOwners: true,
   });
   secretsRuntime.activateSecretsRuntimeSnapshot(snapshot);
 }
