@@ -160,7 +160,8 @@ describe("local model run config SecretRef provenance", () => {
     // as the runtime source before any command runs). Without this the helper
     // would fall back to the resolved config, exactly like a bootless process.
     setRuntimeConfigSnapshot(structuredClone(hoisted.rawCfg), structuredClone(hoisted.rawCfg));
-    restoreEnv = captureEnv([ENV_CONFIG_KEY, ENV_ACCOUNT_KEY, ENV_MISSING_KEY]).restore;
+    const capturedEnv = captureEnv([ENV_CONFIG_KEY, ENV_ACCOUNT_KEY, ENV_MISSING_KEY]);
+    restoreEnv = () => capturedEnv.restore();
     setTestEnvValue(ENV_CONFIG_KEY, CONFIG_KEY_VALUE);
     setTestEnvValue(ENV_ACCOUNT_KEY, ACCOUNT_KEY_VALUE);
     deleteTestEnvValue(ENV_MISSING_KEY);
