@@ -9,10 +9,12 @@ const mocks = vi.hoisted(() => {
     snapshot,
     prepareSecretsRuntimeSnapshot: vi.fn(async () => snapshot),
     activateSecretsRuntimeSnapshot: vi.fn(),
-    prepareSimpleCompletionModelForAgent: vi.fn(async () => ({
+    releasePreparedModel: vi.fn(),
+    acquireSimpleCompletionModelForAgent: vi.fn(async () => ({
       selection: { provider: "openai", modelId: "gpt-test", agentDir: "/tmp/agent-ops" },
       model: { provider: "openai", id: "gpt-test", maxTokens: 128 },
       auth: { apiKey: "synthetic-runtime-key", source: "profile:openai:test", mode: "api-key" },
+      release: mocks.releasePreparedModel,
     })),
     completeWithPreparedSimpleCompletionModel: vi.fn(async () => ({
       content: [{ type: "text", text: "ok" }],
@@ -37,7 +39,7 @@ vi.mock("../../agents/prepared-model-catalog.js", async (importOriginal) => ({
 }));
 
 vi.mock("../../agents/simple-completion-runtime.js", () => ({
-  prepareSimpleCompletionModelForAgent: mocks.prepareSimpleCompletionModelForAgent,
+  acquireSimpleCompletionModelForAgent: mocks.acquireSimpleCompletionModelForAgent,
   completeWithPreparedSimpleCompletionModel: mocks.completeWithPreparedSimpleCompletionModel,
 }));
 
@@ -101,10 +103,11 @@ describe("local model run account secret activation", () => {
       allowUnavailableSecretOwners: true,
     });
     expect(mocks.activateSecretsRuntimeSnapshot).toHaveBeenCalledWith(mocks.snapshot);
-    expect(mocks.prepareSimpleCompletionModelForAgent).toHaveBeenCalledTimes(1);
+    expect(mocks.acquireSimpleCompletionModelForAgent).toHaveBeenCalledTimes(1);
 
     const activationOrder = mocks.activateSecretsRuntimeSnapshot.mock.invocationCallOrder[0];
-    const authLookupOrder = mocks.prepareSimpleCompletionModelForAgent.mock.invocationCallOrder[0];
+    const authLookupOrder = mocks.acquireSimpleCompletionModelForAgent.mock.invocationCallOrder[0];
     expect(activationOrder).toBeLessThan(authLookupOrder);
+    expect(mocks.releasePreparedModel).toHaveBeenCalledTimes(1);
   });
 });

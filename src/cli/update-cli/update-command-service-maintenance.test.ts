@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -72,6 +73,7 @@ type NativeOfflineCase = {
   loaded: boolean;
   offline: boolean;
   enabled?: boolean;
+  phase?: "inspect" | "prepare";
   state?: number | string;
 };
 
@@ -110,6 +112,15 @@ const nativeOfflineCases: NativeOfflineCase[] = [
   },
   {
     platform: "darwin",
+    label: "loaded disabled preparation",
+    runtime: "stopped",
+    loaded: true,
+    enabled: false,
+    offline: true,
+    phase: "prepare",
+  },
+  {
+    platform: "darwin",
     label: "enabled unknown",
     runtime: "stopped",
     loaded: true,
@@ -139,6 +150,12 @@ it.each(nativeOfflineCases)(
     withServiceHome(async (home) => {
       mockProcessPlatform(scenario.platform);
       mocks.taskState = scenario.state ?? 3;
+      const isEnabled = vi.fn<NonNullable<GatewayService["isEnabled"]>>(async () => {
+        if (scenario.enabled === undefined) {
+          throw new Error("enabled state unavailable");
+        }
+        return scenario.enabled;
+      });
       const service = createMockGatewayService({
         readCommand: async () => ({
           programArguments: [process.execPath, path.join(process.cwd(), "openclaw.mjs"), "gateway"],
@@ -149,31 +166,110 @@ it.each(nativeOfflineCases)(
             ? readScheduledTaskRuntime
             : async () => ({ status: scenario.runtime }),
         isLoaded: async () => scenario.loaded,
-        isEnabled: async () => {
-          if (scenario.enabled === undefined) {
-            throw new Error("enabled state unavailable");
-          }
-          return scenario.enabled;
-        },
+        isEnabled,
       });
       mocks.service.mockReturnValue(service);
       const inspected = await maybeStopManagedServiceBeforeMutableUpdate({
         root: process.cwd(),
         updateInstallKind: "package",
         shouldRestart: true,
-        phase: "inspect",
+        phase: scenario.phase ?? "inspect",
         jsonMode: true,
+        timeoutMs: 200,
       });
       expect(inspected.serviceUpdateVerdict?.kind).toBe(
         scenario.runtime === "unknown" ? "unavailable" : "owned",
       );
       expect(inspected.offline).toBe(scenario.offline);
+      for (const [args] of isEnabled.mock.calls) {
+        expect(args.timeoutMs).toBe(200);
+      }
       expect(service.stop).not.toHaveBeenCalled();
       expect(service.start).not.toHaveBeenCalled();
       expect(service.restart).not.toHaveBeenCalled();
       expect(service.stage).not.toHaveBeenCalled();
       expect(service.install).not.toHaveBeenCalled();
     }),
+);
+
+it.each([
+  { code: "ETIMEDOUT", failures: 1, proceeds: true },
+  { code: "ETIMEDOUT", failures: 2, proceeds: false },
+  { code: "ETIMEDOUT", failures: 2, proceeds: false, admitted: true },
+  { code: "ENOENT", failures: 1, proceeds: false },
+])("handles Scheduled Task probe failures before update: %j", (scenario) =>
+  withServiceHome(async (home) => {
+    mockProcessPlatform("win32");
+    mocks.taskState = 4;
+    vi.mocked(spawnSync).mockReset();
+    for (let attempt = 0; attempt < scenario.failures; attempt++) {
+      vi.mocked(spawnSync).mockReturnValueOnce({
+        pid: 0,
+        output: [null, "", ""],
+        stdout: "",
+        stderr: "",
+        status: null,
+        signal: null,
+        error: Object.assign(new Error(`spawnSync powershell.exe ${scenario.code}`), {
+          code: scenario.code,
+        }),
+      });
+    }
+    const service = createMockGatewayService({
+      readCommand: vi.fn(async () => ({
+        programArguments: [process.execPath, path.join(process.cwd(), "openclaw.mjs"), "gateway"],
+        environment: { HOME: home },
+      })),
+      readRuntime: readScheduledTaskRuntime,
+      isLoaded: async () => true,
+    });
+    mocks.service.mockReturnValue(service);
+
+    const inspection = maybeStopManagedServiceBeforeMutableUpdate({
+      root: process.cwd(),
+      updateInstallKind: "package",
+      shouldRestart: true,
+      phase: "inspect",
+      jsonMode: true,
+      timeoutMs: 30_000,
+      expectedService: scenario.admitted
+        ? {
+            serviceUpdateVerdict: {
+              kind: "owned",
+              root: process.cwd(),
+              fingerprint: "admitted-definition",
+              refreshDefinition: true,
+            },
+          }
+        : undefined,
+    });
+
+    if (scenario.admitted) {
+      await expect(inspection).rejects.toThrow("Scheduled Task probe timed out after 30000 ms");
+    } else {
+      const inspected = await inspection;
+      if (scenario.proceeds) {
+        expect(inspected.serviceUpdateVerdict?.kind).toBe("owned");
+        expect(inspected.blockMessage).toBeUndefined();
+        expect(inspected.running).toBe(true);
+      } else {
+        expect(inspected.serviceUpdateVerdict?.kind).toBe("unavailable");
+        expect(inspected.blockMessage).toContain("Refusing to mutate code");
+        if (scenario.code === "ETIMEDOUT") {
+          expect(inspected.blockMessage).toContain("Scheduled Task probe timed out after 30000 ms");
+          expect(inspected.blockMessage).toContain("ETIMEDOUT");
+        }
+      }
+    }
+    const attempts = scenario.code === "ETIMEDOUT" ? 2 : 1;
+    expect(spawnSync).toHaveBeenCalledTimes(attempts);
+    expect(service.readCommand).toHaveBeenCalledTimes(attempts);
+    for (const call of vi.mocked(spawnSync).mock.calls) {
+      expect(call[2]?.timeout).toBe(30_000);
+    }
+    expect(service.stop).not.toHaveBeenCalled();
+    expect(service.install).not.toHaveBeenCalled();
+  }),
 );
 
 it

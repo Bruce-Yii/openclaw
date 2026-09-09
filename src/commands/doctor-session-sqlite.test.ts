@@ -29,6 +29,8 @@ import { prepareGithubIssue } from "../infra/github-issue.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import * as replaceFile from "../infra/replace-file.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
+import * as sqlitePrivateDirectory from "../infra/sqlite-private-directory.js";
+import * as windowsPrivateDirectory from "../infra/windows-private-directory.js";
 import { ExitError } from "../runtime.js";
 import {
   AGENT_DATABASE_MAINTENANCE_LEASE,
@@ -1321,6 +1323,15 @@ describe("runDoctorSessionSqlite", () => {
       const fsync = fs.fsyncSync;
       const failureCode =
         syncFailure === "EIO" ? "EIO" : platform === "win32" ? "EPERM" : "ENOTSUP";
+      // Simulate directory-sync policy without invoking foreign-platform ACL APIs.
+      const stagingRootSpy = vi
+        .spyOn(sqlitePrivateDirectory, "resolvePrivateSqliteSnapshotStagingRoot")
+        .mockReturnValue(store.tempDir);
+      const privateDirectorySpy = vi
+        .spyOn(windowsPrivateDirectory, "createPrivateWindowsDirectory")
+        .mockImplementation((directoryPath) => {
+          fs.mkdirSync(directoryPath, { mode: 0o700 });
+        });
       const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue(platform);
       const syncSpy = vi.spyOn(fs, "fsyncSync").mockImplementation((fd) => {
         if (!isDirectoryDescriptor(fd, path.dirname(manifestPath))) {
@@ -1364,6 +1375,8 @@ describe("runDoctorSessionSqlite", () => {
       } finally {
         syncSpy.mockRestore();
         platformSpy.mockRestore();
+        privateDirectorySpy.mockRestore();
+        stagingRootSpy.mockRestore();
       }
     },
   );
@@ -5304,6 +5317,54 @@ describe("runDoctorSessionSqlite", () => {
     expect(recover.targets[0]?.restore?.manifestPaths).toEqual([manifestPath]);
     expect(recover.supportIssue?.body).not.toContain("unselected_failure");
     expect(fs.existsSync(store.transcriptPath)).toBe(true);
+  });
+
+  it("explains hard-linked legacy index refusal and supports an independent copy before retry", async () => {
+    const store = createLegacyStore();
+    const snapshotPath = path.join(store.tempDir, "snapshot-sessions.json");
+    const originalBytes = fs.readFileSync(store.storePath);
+    fs.linkSync(store.storePath, snapshotPath);
+
+    const refused = importLegacyStore(store);
+    await expect(refused).rejects.toThrow(store.storePath);
+    await expect(refused).rejects.toThrow("nlink=2");
+    await expect(refused).rejects.toThrow("another hard link references this inode");
+    await expect(refused).rejects.toThrow("backup");
+    await expect(refused).rejects.toThrow("#hard-linked-legacy-artifacts");
+    expect(fs.lstatSync(store.storePath).nlink).toBe(2);
+    expect(fs.readFileSync(store.storePath)).toEqual(originalBytes);
+    expect(fs.readFileSync(snapshotPath)).toEqual(originalBytes);
+    expect(fs.existsSync(store.transcriptPath)).toBe(true);
+
+    const copyPath = path.join(store.sessionDir, "sessions-copy.tmp");
+    fs.copyFileSync(store.storePath, copyPath, fs.constants.COPYFILE_EXCL);
+    expect(fs.readFileSync(copyPath)).toEqual(originalBytes);
+    fs.renameSync(copyPath, store.storePath);
+    expect(fs.lstatSync(store.storePath).nlink).toBe(1);
+    expect((await importLegacyStore(store)).totals.issues).toBe(0);
+    expect(fs.readFileSync(snapshotPath)).toEqual(originalBytes);
+  });
+
+  it("explains hard-linked transcript archive refusal without changing either link", async () => {
+    const store = createLegacyStore();
+    const snapshotPath = path.join(store.tempDir, "snapshot-transcript.jsonl");
+    const originalBytes = fs.readFileSync(store.transcriptPath);
+    fs.linkSync(store.transcriptPath, snapshotPath);
+
+    const report = await importLegacyStore(store);
+    const issue = expectDefined(
+      report.targets[0]?.issues.find((entry) => entry.code === "transcript_archive_failed"),
+      "hard-linked transcript archive refusal",
+    );
+    expect(issue.message).toContain(store.transcriptPath);
+    expect(issue.message).toContain("nlink=2");
+    expect(issue.message).toContain("another hard link references this inode");
+    expect(issue.message).toContain("backup");
+    expect(issue.message).toContain("#hard-linked-legacy-artifacts");
+    expect(fs.lstatSync(store.transcriptPath).nlink).toBe(2);
+    expect(fs.readFileSync(store.transcriptPath)).toEqual(originalBytes);
+    expect(fs.readFileSync(snapshotPath)).toEqual(originalBytes);
+    expect(fs.existsSync(store.storePath)).toBe(true);
   });
 
   it.skipIf(process.platform === "win32")(

@@ -568,10 +568,10 @@ Reload never migrates workspace state.
 
 ### Reload modes
 
-| Mode                   | Behavior                                                                |
-| ---------------------- | ----------------------------------------------------------------------- |
-| **`hybrid`** (default) | Applies hot-reloadable settings. Automatically restarts when required.  |
-| **`off`**              | Disables file watching. Changes take effect on the next manual restart. |
+| Mode                   | Behavior                                                                                      |
+| ---------------------- | --------------------------------------------------------------------------------------------- |
+| **`hybrid`** (default) | Applies hot-reloadable settings. Automatically restarts when required.                        |
+| **`off`**              | Keeps watching and validating config. Runtime changes take effect on the next manual restart. |
 
 ```json5
 {
@@ -808,6 +808,13 @@ openclaw gateway call config.patch --params '{
   "baseHash": "<hash>"
 }'
 ```
+
+`config.patch` records explicitly supplied values in the config file even when
+they equal the current runtime defaults. Unchanged runtime defaults stay omitted. Its
+successful response includes `changedPaths`, the effective runtime paths changed
+after validation and secret restoration, or `[]` for a no-op. These paths contain
+no configuration values; clients can use them to distinguish a channel change
+from an unrelated write even when secret values are redacted.
 
 Both `config.apply` and `config.patch` accept `raw`, `baseHash`, `sessionKey`,
 `note`, and `restartDelayMs`. `baseHash` is required for both methods once a

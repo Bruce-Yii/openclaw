@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
 import { createPluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-store-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { CrabboxOperatingSystem } from "./crabbox-worker-profile.js";
 
 type WorkerNodeRuntimeIdentity = NonNullable<
   NonNullable<Parameters<WorkerProvider["provision"]>[2]>["nodeRuntimeIdentity"]
@@ -21,6 +22,8 @@ export type WarmImageRecord = {
 export type WarmAllocationRecord = {
   choice: { kind: "cold" } | { kind: "checkpoint"; checkpointId: string };
   machineClass: string;
+  /** Absent in existing Linux allocations. */
+  os?: CrabboxOperatingSystem;
   phase: "pending" | "prepared" | "enrolled";
   baseCommit?: string;
   /** Frozen target; preparation/enrollment must verify it before capture can publish it. */
@@ -141,11 +144,14 @@ export function crabboxWarmImageCaptureStatus(_key: string, record: WarmProfileR
   };
 }
 
-export function isCrabboxWarmImageCapturePaused(
+export function isCrabboxWarmImageCaptureUncertain(
   capture: NonNullable<ReturnType<typeof crabboxWarmImageCaptureStatus>>,
 ): boolean {
-  return capture.stale || capture.phase === "uncertain";
+  return capture.phase === "uncertain";
 }
+
+export const CRABBOX_WARM_IMAGE_WAIT_HINT =
+  "The capture may still be preparing its source or waiting for provider readiness. Inspect openclaw crabbox warm-images --json and allow the owning capture to settle.";
 
 export function crabboxWarmImageRecoveryHint(selector: string): string {
   return `Stop the owning Gateway and capture processes, confirm any worker being recovered is stopped, and resolve any untracked checkpoint in the Crabbox catalog before running: openclaw crabbox warm-images --recover ${selector} --acknowledge-provider-cleanup. Then restart the Gateway; the next eligible worker can capture again.`;
