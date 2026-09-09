@@ -23,9 +23,15 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 const hoisted = vi.hoisted(() => ({
   rawCfg: {} as OpenClawConfig,
-  completeWithPreparedSimpleCompletionModel: vi.fn(async () => ({
-    content: [{ type: "text", text: "synthetic-ok" }],
-  })),
+  completeWithPreparedSimpleCompletionModel: vi.fn(
+    async (
+      _params: Parameters<
+        typeof import("../../agents/simple-completion-execution.js").completeWithPreparedSimpleCompletionModel
+      >[0],
+    ) => ({
+      content: [{ type: "text", text: "synthetic-ok" }],
+    }),
+  ),
   emitJsonOrText: vi.fn(),
 }));
 
@@ -138,15 +144,9 @@ async function runLocalModelRun(model: string): Promise<void> {
   );
 }
 
-type CompletionAuth = { apiKey?: string; source?: string };
-
 /** Reads the auth captured by the faked provider-egress boundary. */
-function getCompletionAuth(): CompletionAuth | undefined {
-  const args = completeWithPreparedSimpleCompletionModelMock.mock.calls.at(-1) as
-    | unknown[]
-    | undefined;
-  const params = args?.[0] as { auth?: CompletionAuth } | undefined;
-  return params?.auth;
+function getCompletionAuth() {
+  return completeWithPreparedSimpleCompletionModelMock.mock.calls.at(-1)?.[0]?.auth;
 }
 
 describe("local model run config SecretRef provenance", () => {
