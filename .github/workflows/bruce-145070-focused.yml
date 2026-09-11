@@ -6,7 +6,7 @@ on:
       - fix/doctor-systemd-final-revalidation
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   focused:
@@ -26,5 +26,37 @@ jobs:
           pnpm --version
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-      - name: Run focused red/green regression
+      - name: Apply minimal production fix in working tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          path = Path("src/commands/doctor-maintenance.ts")
+          text = path.read_text()
+          old = """      const state = await readGatewayServiceState(service, {\n        env: stopped.serviceEnv,\n        requireEffective: true,\n      });"""
+          new = """      const state = await readGatewayServiceState(service, {\n        env: stopped.serviceEnv,\n        requireEffective: true,\n        requireLoadedCommand: true,\n      });"""
+          if new in text:
+              print("production fix already present")
+          elif old in text:
+              path.write_text(text.replace(old, new, 1))
+              print("applied one-line production fix")
+          else:
+              raise SystemExit("expected Doctor final service read was not found")
+          PY
+          git diff --check
+      - name: Run focused regression
         run: node scripts/run-vitest.mjs src/flows/doctor-health.systemd-revalidation.test.ts
+      - name: Commit validated production fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- src/commands/doctor-maintenance.ts; then
+            echo "production fix already committed"
+            exit 0
+          fi
+          git config user.name "Bruce-Yii"
+          git config user.email "yuyi64906@gmail.com"
+          git add src/commands/doctor-maintenance.ts
+          git commit -m "fix(doctor): preserve systemd identity during final revalidation"
+          git push origin HEAD:fix/doctor-systemd-final-revalidation
