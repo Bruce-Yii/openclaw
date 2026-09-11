@@ -221,6 +221,11 @@ export async function beginDoctorMaintenance(params: {
       const state = await readGatewayServiceState(service, {
         env: stopped.serviceEnv,
         requireEffective: true,
+        // Reuse the identity-bearing inspection the pre-stop and
+        // update-restart paths already use: the ordinary status read omits
+        // the systemd manager UID, and Linux revalidation rejects the
+        // identity-less verdict before restart (#145070).
+        requireLoadedCommand: true,
       });
       assertDoctorServiceSelection(env, state.env);
       await revalidateManagedGatewayServiceAfterUpdate({
