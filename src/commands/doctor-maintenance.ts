@@ -221,6 +221,7 @@ export async function beginDoctorMaintenance(params: {
       const state = await readGatewayServiceState(service, {
         env: stopped.serviceEnv,
         requireEffective: true,
+        requireLoadedCommand: true,
       });
       assertDoctorServiceSelection(env, state.env);
       await revalidateManagedGatewayServiceAfterUpdate({
