@@ -17,6 +17,7 @@ const retirementRules = vi.hoisted(() =>
     "retired-with-successor",
     "retired-without-successor",
     "retired-with-slash",
+    "retired-chain-to-retired",
     "retired-global-without-successor",
     "retired-api-conditioned",
   ].map((model) => ({
@@ -34,7 +35,12 @@ const retirementRules = vi.hoisted(() =>
     retirement: model.includes("without-successor")
       ? {}
       : {
-          replacedBy: model === "retired-with-slash" ? "family/current-model" : "current-model",
+          replacedBy:
+            model === "retired-with-slash"
+              ? "family/current-model"
+              : model === "retired-chain-to-retired"
+                ? "retired-without-successor"
+                : "current-model",
         },
   })),
 );

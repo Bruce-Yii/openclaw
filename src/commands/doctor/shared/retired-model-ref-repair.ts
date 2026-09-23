@@ -44,8 +44,9 @@ import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-sn
 import { listMutableCodexRouteAgentEntries } from "./codex-route-agent-entries.js";
 import { readModelConfigPrimaryRef } from "./codex-route-model-ref.js";
 import { rewriteModelReferenceSlot } from "./codex-route-model-slots.js";
+import { resolveSuccessorModelRepair } from "./retired-model-successor-guard.js";
 
-type ModelRetirementScope = "route" | "owner" | "provider";
+export type ModelRetirementScope = "route" | "owner" | "provider";
 
 export type ModelRefRepair =
   | { kind: "unchanged" }
@@ -253,6 +254,10 @@ export function createRetiredModelRefRepairResolver(params: {
     }
     let rule = owner.suppression()({ provider, id, unconditionalOnly: true });
     let retirementScope: ModelRetirementScope = rule?.retirement ? "provider" : "route";
+    // Route context that proved the source retirement. A successor must be
+    // validated against this same owner context before migration (#156155).
+    let successorSuppressionConfig: OpenClawConfig | undefined;
+    let successorBaseUrl: string | undefined;
     if (!rule?.retirement) {
       const pinnedProfileId =
         (input.authProfileSource === "user" || input.authProfileSource === "user-link"
@@ -309,6 +314,8 @@ export function createRetiredModelRefRepairResolver(params: {
             baseUrl,
           });
       rule = owner.suppression(routeConfig)({ provider, id, baseUrl });
+      successorSuppressionConfig = routeConfig;
+      successorBaseUrl = baseUrl;
       if (rule?.retirement) {
         const routes =
           auth.routeResolution?.kind === "routes"
@@ -337,16 +344,21 @@ export function createRetiredModelRefRepairResolver(params: {
     if (!rule?.retirement) {
       return validatePolicy(preserved);
     }
-    const successor = rule.retirement.replacedBy;
-    if (!successor) {
-      return { kind: "clear", provider, modelRef: canonical, retirementScope };
-    }
-    const modelRef = `${provider}/${successor}`;
-    return validatePolicy({
-      kind: "replace",
-      modelRef: parsed.profile ? `${modelRef}@${parsed.profile}` : modelRef,
-      reason: "retirement",
+    return resolveSuccessorModelRepair({
+      owner,
+      provider,
+      canonical,
+      agentId,
+      modelRefInput: input.modelRef,
+      authProfileId: input.authProfileId,
+      authProfileSource: input.authProfileSource,
+      retirement: rule.retirement,
       retirementScope,
+      suppressionConfig: successorSuppressionConfig,
+      suppressionBaseUrl: successorBaseUrl,
+      preserved,
+      validatePolicy,
+      warn,
     });
   };
   return (input) => {
