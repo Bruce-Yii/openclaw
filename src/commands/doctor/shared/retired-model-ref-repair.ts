@@ -44,7 +44,6 @@ import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-sn
 import { listMutableCodexRouteAgentEntries } from "./codex-route-agent-entries.js";
 import { readModelConfigPrimaryRef } from "./codex-route-model-ref.js";
 import { rewriteModelReferenceSlot } from "./codex-route-model-slots.js";
-import { resolveSuccessorModelRepair } from "./retired-model-successor-guard.js";
 
 export type ModelRetirementScope = "route" | "owner" | "provider";
 
@@ -344,21 +343,58 @@ export function createRetiredModelRefRepairResolver(params: {
     if (!rule?.retirement) {
       return validatePolicy(preserved);
     }
-    return resolveSuccessorModelRepair({
-      owner,
-      provider,
-      canonical,
-      agentId,
-      modelRefInput: input.modelRef,
-      authProfileId: input.authProfileId,
-      authProfileSource: input.authProfileSource,
-      retirement: rule.retirement,
+    const successor = rule.retirement.replacedBy;
+    if (!successor) {
+      return {
+        kind: "clear",
+        provider,
+        modelRef: canonical,
+        retirementScope,
+      };
+    }
+    // Validate the successor against the same owner context before migrating.
+    // Writing an unsupported successor into selectors, fallbacks, and policy
+    // allow lists converts a visible retirement warning into a latent unusable
+    // reference (#156155). Missing evidence is not proof: only an explicitly
+    // retired or authoritatively unavailable successor blocks the migration.
+    const successorId = canonicalizeProviderModelId(provider, successor);
+    const successorRule = successorSuppressionConfig
+      ? owner.suppression(successorSuppressionConfig)({
+          provider,
+          id: successorId,
+          baseUrl: successorBaseUrl,
+        })
+      : owner.suppression()({ provider, id: successorId, unconditionalOnly: true });
+    if (successorRule?.retirement) {
+      warn(
+        `Retained ${canonical} for agent "${agentId}": successor "${provider}/${successor}" is retired. Choose a supported model explicitly and rerun openclaw doctor --fix.`,
+      );
+      return validatePolicy(preserved);
+    }
+    const pinnedProfileId =
+      (input.authProfileSource === "user" || input.authProfileSource === "user-link"
+        ? input.authProfileId
+        : undefined) ?? parsed.profile;
+    const preferredProfileId = pinnedProfileId ? undefined : input.authProfileId;
+    const support = owner
+      .auth(pinnedProfileId ?? preferredProfileId)
+      .evaluateRuntimeModelAuth(provider, {
+        modelId: successorId,
+        pinnedProfileId,
+        preferredProfileId,
+      });
+    if (support.availability === false && support.availabilityAuthoritative) {
+      warn(
+        `Retained ${canonical} for agent "${agentId}": successor "${provider}/${successor}" is not supported by this agent's authentication route. Choose a supported model explicitly and rerun openclaw doctor --fix.`,
+      );
+      return validatePolicy(preserved);
+    }
+    const modelRef = `${provider}/${successor}`;
+    return validatePolicy({
+      kind: "replace",
+      modelRef: parsed.profile ? `${modelRef}@${parsed.profile}` : modelRef,
+      reason: "retirement",
       retirementScope,
-      suppressionConfig: successorSuppressionConfig,
-      suppressionBaseUrl: successorBaseUrl,
-      preserved,
-      validatePolicy,
-      warn,
     });
   };
   return (input) => {
