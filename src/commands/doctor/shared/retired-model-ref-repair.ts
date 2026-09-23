@@ -31,7 +31,6 @@ import {
   projectModelProviderConfig,
   resolveMergedModelProviderConfig,
 } from "../../../config/model-provider-config.js";
-import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { normalizePluginsConfig } from "../../../plugins/config-state.js";
 import { createInstalledPluginEnabledPredicate } from "../../../plugins/installed-plugin-index.js";
@@ -44,32 +43,19 @@ import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-sn
 import { listMutableCodexRouteAgentEntries } from "./codex-route-agent-entries.js";
 import { readModelConfigPrimaryRef } from "./codex-route-model-ref.js";
 import { rewriteModelReferenceSlot } from "./codex-route-model-slots.js";
+import type {
+  ModelRefRepair,
+  ModelRefRepairResolver,
+  ModelRetirementScope,
+  SessionModelRetirement,
+} from "./retired-model-ref-repair.types.js";
+import { resolveSuccessorModelRepair } from "./retired-model-successor-guard.js";
 
-export type ModelRetirementScope = "route" | "owner" | "provider";
-
-export type ModelRefRepair =
-  | { kind: "unchanged" }
-  | { kind: "replace"; modelRef: string; reason: "reference-preservation" }
-  | {
-      kind: "replace";
-      modelRef: string;
-      reason: "retirement";
-      retirementScope: ModelRetirementScope;
-    }
-  | { kind: "clear"; provider: string; modelRef: string; retirementScope: ModelRetirementScope };
-export type ModelRefRepairResolver = (params: {
-  modelRef: string;
-  agentId?: string;
-  authProfileId?: string;
-  authProfileSource?: SessionEntry["authProfileOverrideSource"];
-  authProfileOnly?: boolean;
-}) => ModelRefRepair;
-
-export type SessionModelRetirement = {
-  agentId: string;
-  resolve: ModelRefRepairResolver;
-  defaultModelRef?: string;
-  warnings: string[];
+export type {
+  ModelRefRepair,
+  ModelRefRepairResolver,
+  ModelRetirementScope,
+  SessionModelRetirement,
 };
 
 export function repairModelRefAuthProfile(
@@ -343,58 +329,22 @@ export function createRetiredModelRefRepairResolver(params: {
     if (!rule?.retirement) {
       return validatePolicy(preserved);
     }
-    const successor = rule.retirement.replacedBy;
-    if (!successor) {
-      return {
-        kind: "clear",
-        provider,
-        modelRef: canonical,
-        retirementScope,
-      };
-    }
-    // Validate the successor against the same owner context before migrating.
-    // Writing an unsupported successor into selectors, fallbacks, and policy
-    // allow lists converts a visible retirement warning into a latent unusable
-    // reference (#156155). Missing evidence is not proof: only an explicitly
-    // retired or authoritatively unavailable successor blocks the migration.
-    const successorId = canonicalizeProviderModelId(provider, successor);
-    const successorRule = successorSuppressionConfig
-      ? owner.suppression(successorSuppressionConfig)({
-          provider,
-          id: successorId,
-          baseUrl: successorBaseUrl,
-        })
-      : owner.suppression()({ provider, id: successorId, unconditionalOnly: true });
-    if (successorRule?.retirement) {
-      warn(
-        `Retained ${canonical} for agent "${agentId}": successor "${provider}/${successor}" is retired. Choose a supported model explicitly and rerun openclaw doctor --fix.`,
-      );
-      return validatePolicy(preserved);
-    }
-    const pinnedProfileId =
-      (input.authProfileSource === "user" || input.authProfileSource === "user-link"
-        ? input.authProfileId
-        : undefined) ?? parsed.profile;
-    const preferredProfileId = pinnedProfileId ? undefined : input.authProfileId;
-    const support = owner
-      .auth(pinnedProfileId ?? preferredProfileId)
-      .evaluateRuntimeModelAuth(provider, {
-        modelId: successorId,
-        pinnedProfileId,
-        preferredProfileId,
-      });
-    if (support.availability === false && support.availabilityAuthoritative) {
-      warn(
-        `Retained ${canonical} for agent "${agentId}": successor "${provider}/${successor}" is not supported by this agent's authentication route. Choose a supported model explicitly and rerun openclaw doctor --fix.`,
-      );
-      return validatePolicy(preserved);
-    }
-    const modelRef = `${provider}/${successor}`;
-    return validatePolicy({
-      kind: "replace",
-      modelRef: parsed.profile ? `${modelRef}@${parsed.profile}` : modelRef,
-      reason: "retirement",
+    return resolveSuccessorModelRepair({
+      owner,
+      provider,
+      canonical,
+      agentId,
+      config: params.cfg,
+      modelRefInput: input.modelRef,
+      authProfileId: input.authProfileId,
+      authProfileSource: input.authProfileSource,
+      retirement: rule.retirement,
       retirementScope,
+      suppressionConfig: successorSuppressionConfig,
+      suppressionBaseUrl: successorBaseUrl,
+      preserved,
+      validatePolicy,
+      warn,
     });
   };
   return (input) => {

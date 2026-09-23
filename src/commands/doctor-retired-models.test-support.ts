@@ -18,13 +18,16 @@ const retirementRules = vi.hoisted(() =>
     "retired-without-successor",
     "retired-with-slash",
     "retired-chain-to-retired",
+    "retired-incompat-chain",
+    "retired-global-parent",
+    "retired-route-child",
     "retired-global-without-successor",
     "retired-api-conditioned",
   ].map((model) => ({
     provider: "openai",
     model,
     when:
-      model === "retired-global-without-successor"
+      model === "retired-global-without-successor" || model === "retired-global-parent"
         ? undefined
         : {
             baseUrlHosts: ["chatgpt.com"],
@@ -40,7 +43,11 @@ const retirementRules = vi.hoisted(() =>
               ? "family/current-model"
               : model === "retired-chain-to-retired"
                 ? "retired-without-successor"
-                : "current-model",
+                : model === "retired-incompat-chain"
+                  ? "CHAT-LATEST"
+                  : model === "retired-global-parent"
+                    ? "retired-route-child"
+                    : "current-model",
         },
   })),
 );
