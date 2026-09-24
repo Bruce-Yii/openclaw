@@ -51,12 +51,7 @@ import type {
 } from "./retired-model-ref-repair.types.js";
 import { resolveSuccessorModelRepair } from "./retired-model-successor-guard.js";
 
-export type {
-  ModelRefRepair,
-  ModelRefRepairResolver,
-  ModelRetirementScope,
-  SessionModelRetirement,
-};
+export type { ModelRefRepair, ModelRefRepairResolver, SessionModelRetirement };
 
 export function repairModelRefAuthProfile(
   modelRef: string,
