@@ -15,6 +15,8 @@ import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metada
 import * as activeThinkingPolicy from "../../plugins/provider-thinking-active.js";
 import { prepareModelCatalogThinkingPolicies } from "../../plugins/provider-thinking.js";
 import { isThinkingLevelSupported } from "../thinking.js";
+import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
+import { applyInlineDirectiveOverrides } from "./get-reply-directives-apply.js";
 import { prepareModelSelectionRuntime } from "./model-runtime-normalization.js";
 import {
   createInitialState,
@@ -22,6 +24,7 @@ import {
   makeEntry,
 } from "./model-selection.inputs.test-support.js";
 import { createModelSelectionState, resolveContextTokens } from "./model-selection.js";
+import { buildTestCtx } from "./test-ctx.js";
 
 type PersistReplySessionEntry =
   (typeof import("./session-entry-persistence.js"))["persistReplySessionEntry"];
@@ -77,6 +80,12 @@ vi.mock("../../plugins/current-plugin-metadata-snapshot.js", async (importOrigin
 
 vi.mock("./session-entry-persistence.js", () => ({
   persistReplySessionEntry: sessionPersistenceMocks.persistReplySessionEntry,
+}));
+
+const systemEventMock = vi.hoisted(() => ({ enqueueSystemEvent: vi.fn() }));
+
+vi.mock("../../infra/system-events.js", () => ({
+  enqueueSystemEvent: (...args: unknown[]) => systemEventMock.enqueueSystemEvent(...args),
 }));
 
 const authProfileStoreMock = vi.hoisted(() => {
@@ -1210,6 +1219,110 @@ describe("createModelSelectionState respects session model override", () => {
     expect(state.resetModelOverrideReason).toBe("disallowed");
     expect(state.provider).toBe("openai");
     expect(state.model).toBe("gpt-4o");
+  });
+
+  it("emits a reset notice naming the primary through the real reply path", async () => {
+    // End-to-end proof for openclaw/openclaw#157377: a real
+    // createModelSelectionState (disallowed override, primary not first in
+    // the catalog) feeds a real applyInlineDirectiveOverrides, which must
+    // emit a system event naming the configured primary — not the first
+    // catalog entry.
+    const cfg = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-4o",
+            fallbacks: ["openai/gpt-4o-mini"],
+          },
+          models: {
+            "openai/gpt-4o": {},
+          },
+          modelPolicy: { allow: ["xai/*", "openai/gpt-4o", "openai/gpt-4o-mini"] },
+        },
+      },
+    } as OpenClawConfig;
+    const sessionKey = "agent:main:telegram:direct:disallowed-notice";
+    const sessionEntry = makeEntry({
+      providerOverride: "anthropic",
+      modelOverride: "claude-opus-4-6",
+    });
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const modelState = await createModelSelectionState({
+      agentId: "main",
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      defaultProvider: "openai",
+      defaultModel: "gpt-4o",
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      hasModelDirective: false,
+    });
+    expect(modelState.provider).toBe("openai");
+    expect(modelState.model).toBe("gpt-4o");
+
+    const initialModelLabel = `${modelState.provider}/${modelState.model}`;
+    const directives = parseInlineSessionDirectives("hello");
+    const typing = {
+      onReplyStart: async () => {},
+      startTypingLoop: async () => {},
+      startTypingOnText: async () => {},
+      refreshTypingTtl: () => {},
+      isActive: () => false,
+      markRunComplete: () => {},
+      markDispatchIdle: () => {},
+      cleanup: vi.fn(),
+    };
+    systemEventMock.enqueueSystemEvent.mockClear();
+
+    await applyInlineDirectiveOverrides({
+      ctx: buildTestCtx({ Body: "hello" }),
+      cfg,
+      agentId: "main",
+      agentDir: "/tmp/agent",
+      workspaceDir: "/tmp/workspace",
+      agentCfg: cfg.agents?.defaults,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      sessionScope: undefined,
+      isGroup: false,
+      allowTextCommands: true,
+      command: {
+        surface: "webchat",
+        channel: "webchat",
+        ownerList: [],
+        senderIsOwner: true,
+        isAuthorizedSender: true,
+        rawBodyNormalized: "hello",
+        commandBodyNormalized: "hello",
+      },
+      directives,
+      messageProviderKey: "webchat",
+      elevatedEnabled: true,
+      elevatedAllowed: true,
+      elevatedFailures: [],
+      defaultProvider: "openai",
+      defaultModel: "gpt-4o",
+      aliasIndex: { byAlias: new Map(), byKey: new Map() },
+      provider: modelState.provider,
+      model: modelState.model,
+      modelState,
+      initialModelLabel,
+      formatModelSwitchEvent: (label: string) => label,
+      resolvedElevatedLevel: "off",
+      defaultActivation: () => "always",
+      contextTokens: 8192,
+      typing,
+    });
+
+    expect(systemEventMock.enqueueSystemEvent).toHaveBeenCalledWith(
+      expect.stringContaining("reverted to openai/gpt-4o"),
+      expect.objectContaining({ sessionKey }),
+    );
   });
 
   it("preserves a locked disallowed override without resetting it", async () => {
