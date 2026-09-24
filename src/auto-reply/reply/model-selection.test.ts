@@ -17,6 +17,8 @@ import { prepareModelCatalogThinkingPolicies } from "../../plugins/provider-thin
 import { isThinkingLevelSupported } from "../thinking.js";
 import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
 import { applyInlineDirectiveOverrides } from "./get-reply-directives-apply.js";
+import { resolveReplyDirectives } from "./get-reply-directives.js";
+import { makeTypingController } from "./get-reply-directives.target-session.test-helpers.js";
 import { prepareModelSelectionRuntime } from "./model-runtime-normalization.js";
 import {
   createInitialState,
@@ -24,6 +26,7 @@ import {
   makeEntry,
 } from "./model-selection.inputs.test-support.js";
 import { createModelSelectionState, resolveContextTokens } from "./model-selection.js";
+import { prepareReplyConversation } from "./prompt-session-context.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 type PersistReplySessionEntry =
@@ -86,6 +89,98 @@ const systemEventMock = vi.hoisted(() => ({ enqueueSystemEvent: vi.fn() }));
 
 vi.mock("../../infra/system-events.js", () => ({
   enqueueSystemEvent: (...args: unknown[]) => systemEventMock.enqueueSystemEvent(...args),
+}));
+
+vi.mock("../../agents/agent-scope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/agent-scope.js")>()),
+  listAgentEntries: vi.fn(() => []),
+}));
+
+vi.mock("../../agents/defaults.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/defaults.js")>()),
+  DEFAULT_CONTEXT_TOKENS: 8192,
+}));
+
+vi.mock("../../agents/fast-mode.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/fast-mode.js")>()),
+  resolveFastModeState: vi.fn(() => ({})),
+}));
+
+vi.mock("../../agents/sandbox/runtime-status.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/sandbox/runtime-status.js")>()),
+  resolveSandboxRuntimeStatus: vi.fn(() => ({ sandboxed: false })),
+}));
+
+vi.mock("../../agents/thinking-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/thinking-runtime.js")>()),
+  resolveEffectiveAgentRuntime: ({
+    cfg,
+    provider,
+    modelId,
+  }: {
+    cfg: OpenClawConfig;
+    provider: string;
+    modelId: string;
+  }) =>
+    cfg.agents?.defaults?.models?.[`${provider}/${modelId}`]?.agentRuntime?.id ??
+    (provider === "openai" ? "codex" : "openclaw"),
+}));
+
+vi.mock("../../routing/session-key.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../routing/session-key.js")>()),
+  normalizeAgentId: vi.fn((value: string) => value),
+}));
+
+vi.mock("../commands-text-routing.js", () => ({
+  shouldHandleTextCommands: () => false,
+}));
+
+vi.mock("./commands-context.js", () => ({
+  buildCommandContext: vi.fn(() => ({
+    surface: "webchat",
+    channel: "webchat",
+    channelId: "webchat",
+    ownerList: [],
+    senderIsOwner: true,
+    isAuthorizedSender: true,
+    senderId: undefined,
+    abortKey: "abort-key",
+    rawBodyNormalized: "hello",
+    commandBodyNormalized: "hello",
+    from: "webchat:+1000",
+    to: "webchat:+2000",
+  })),
+}));
+
+vi.mock("./get-reply-directive-aliases.js", () => ({
+  reserveSkillCommandNames: vi.fn(),
+  resolveConfiguredDirectiveAliases: vi.fn(() => []),
+}));
+
+vi.mock("./runtime-policy-session-key.js", () => ({
+  resolveRuntimePolicySessionKey: ({ sessionKey }: { sessionKey?: string }) => sessionKey,
+}));
+
+vi.mock("./get-reply-exec-overrides.js", () => ({
+  resolveReplyExecOverrides: vi.fn(async () => ({})),
+}));
+
+vi.mock("./get-reply-fast-path.js", () => ({
+  shouldUseReplyFastTestRuntime: vi.fn(() => false),
+}));
+
+vi.mock("./groups.js", () => ({
+  defaultGroupActivation: vi.fn(() => "always"),
+  resolveGroupRequireMention: vi.fn(async () => false),
+}));
+
+vi.mock("./reply-elevated.js", () => ({
+  formatElevatedUnavailableMessage: vi.fn(() => "elevated unavailable"),
+  resolveElevatedPermissions: vi.fn(() => ({
+    enabled: true,
+    allowed: true,
+    failures: [],
+  })),
 }));
 
 const authProfileStoreMock = vi.hoisted(() => {
@@ -1319,6 +1414,84 @@ describe("createModelSelectionState respects session model override", () => {
       typing,
     });
 
+    expect(systemEventMock.enqueueSystemEvent).toHaveBeenCalledWith(
+      expect.stringContaining("reverted to openai/gpt-4o"),
+      expect.objectContaining({ sessionKey }),
+    );
+  });
+
+  it("resolves a full reply on the primary after a disallowed stored override", async () => {
+    // Full reply-path proof for openclaw/openclaw#157377: a real
+    // resolveReplyDirectives (real model selection + real directive apply,
+    // disallowed override with the primary not first in the catalog) must
+    // continue toward the agent on the configured primary and emit the
+    // reset notice naming it.
+    const cfg = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-4o",
+            fallbacks: ["openai/gpt-4o-mini"],
+          },
+          models: {
+            "openai/gpt-4o": {},
+          },
+          modelPolicy: { allow: ["xai/*", "openai/gpt-4o", "openai/gpt-4o-mini"] },
+        },
+      },
+    } as OpenClawConfig;
+    const sessionKey = "agent:main:webchat:+2000";
+    const sessionEntry = makeEntry({
+      providerOverride: "anthropic",
+      modelOverride: "claude-opus-4-6",
+    });
+    const sessionStore = { [sessionKey]: sessionEntry };
+    const sessionCtx = {
+      Body: "hello",
+      BodyStripped: "hello",
+      BodyForAgent: "hello",
+      CommandBody: "hello",
+      commandText: "hello",
+      agentText: "hello",
+      rawText: "hello",
+      Provider: "webchat",
+    };
+    const typing = makeTypingController();
+    systemEventMock.enqueueSystemEvent.mockClear();
+
+    const result = await resolveReplyDirectives({
+      ctx: buildTestCtx({ Body: "hello", CommandBody: "hello" }),
+      cfg,
+      agentId: "main",
+      agentDir: "/tmp/main-agent",
+      workspaceDir: "/tmp",
+      agentCfg: cfg.agents?.defaults,
+      sessionCtx: sessionCtx as never,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      sessionScope: "per-sender",
+      conversation: prepareReplyConversation({ ctx: { Provider: "webchat" } }),
+      isGroup: false,
+      triggerBodyNormalized: "hello",
+      resetTriggered: false,
+      commandAuthorized: false,
+      defaultProvider: "openai",
+      defaultModel: "gpt-4o",
+      aliasIndex: { byAlias: new Map(), byKey: new Map() },
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      hasResolvedHeartbeatModelOverride: false,
+      typing,
+      opts: undefined,
+      skillFilter: undefined,
+    });
+
+    expect(result.kind).toBe("continue");
+    if (result.kind === "continue") {
+      expect(result.result.provider).toBe("openai");
+      expect(result.result.model).toBe("gpt-4o");
+    }
     expect(systemEventMock.enqueueSystemEvent).toHaveBeenCalledWith(
       expect.stringContaining("reverted to openai/gpt-4o"),
       expect.objectContaining({ sessionKey }),
