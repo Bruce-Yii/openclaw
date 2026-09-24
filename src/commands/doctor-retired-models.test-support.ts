@@ -44,7 +44,7 @@ const retirementRules = vi.hoisted(() =>
               : model === "retired-chain-to-retired"
                 ? "retired-without-successor"
                 : model === "retired-incompat-chain"
-                  ? "CHAT-LATEST"
+                  ? "synthetic-platform-only"
                   : model === "retired-global-parent"
                     ? "retired-route-child"
                     : "current-model",
@@ -82,26 +82,33 @@ vi.mock("../agents/openai-model-routes.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../agents/openai-model-routes.js")>();
   return {
     ...actual,
-    createOpenAIModelRoutesResolver: () => () => ({
-      kind: "routes",
-      defaultRuntimeId: "codex",
-      routes: [
-        {
-          api: "openai-responses",
-          baseUrl: "https://api.openai.com/v1",
-          authRequirement: "api-key",
-          requestTransportOverrides: "none",
-          runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
-        },
-        {
-          api: "openai-chatgpt-responses",
-          baseUrl: "https://chatgpt.com/backend-api/codex",
-          authRequirement: "subscription",
-          requestTransportOverrides: "none",
-          runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
-        },
-      ],
-    }),
+    createOpenAIModelRoutesResolver: () => (observed: { modelId?: string }) =>
+      observed.modelId === "synthetic-platform-only"
+        ? {
+            kind: "incompatible" as const,
+            code: "synthetic-platform-only-model",
+            message: "synthetic-platform-only is not available on this route",
+          }
+        : {
+            kind: "routes",
+            defaultRuntimeId: "codex",
+            routes: [
+              {
+                api: "openai-responses",
+                baseUrl: "https://api.openai.com/v1",
+                authRequirement: "api-key",
+                requestTransportOverrides: "none",
+                runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
+              },
+              {
+                api: "openai-chatgpt-responses",
+                baseUrl: "https://chatgpt.com/backend-api/codex",
+                authRequirement: "subscription",
+                requestTransportOverrides: "none",
+                runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
+              },
+            ],
+          },
   };
 });
 

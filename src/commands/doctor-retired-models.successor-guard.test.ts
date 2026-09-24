@@ -49,9 +49,8 @@ describe("doctor retired successor guard", () => {
       env: state.env,
       warnings,
     });
-    // CHAT-LATEST is platform-only; on the subscription route the provider
-    // returns an explicit incompatible route decision without an
-    // authoritative flag, which must still block the migration.
+    // The provider returns an explicit incompatible route decision (without an
+    // authoritative flag) for the successor, which must still block migration.
     expect(resolve({ modelRef: "openai/retired-incompat-chain", agentId: "main" })).toEqual({
       kind: "unchanged",
     });
