@@ -1163,6 +1163,55 @@ describe("createModelSelectionState respects session model override", () => {
     expect(sessionStore[sessionKey]?.providerOverride).toBeUndefined();
   });
 
+  it("resolves a disallowed override to the configured primary, not the first catalog entry", async () => {
+    // Regression for openclaw/openclaw#157377: when a stored session override
+    // is rejected by modelPolicy.allow, the turn must run on the configured
+    // primary — not on whatever allowed model happens to be first in the
+    // catalog. Note gpt-4o-mini sorts before gpt-4o in the mock catalog.
+    const cfg = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-4o",
+            fallbacks: ["openai/gpt-4o-mini"],
+          },
+          models: {
+            "openai/gpt-4o": {},
+          },
+          // xai/* wildcard forces a live catalog load; the openai entries
+          // are exact allows so the catalog (not just configured models)
+          // drives the fallback order. gpt-4o-mini sorts before gpt-4o.
+          modelPolicy: { allow: ["xai/*", "openai/gpt-4o", "openai/gpt-4o-mini"] },
+        },
+      },
+    } as OpenClawConfig;
+    const sessionKey = "agent:main:telegram:direct:disallowed-primary";
+    const sessionEntry = makeEntry({
+      providerOverride: "anthropic",
+      modelOverride: "claude-opus-4-6",
+    });
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const state = await createModelSelectionState({
+      agentId: "main",
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      defaultProvider: "openai",
+      defaultModel: "gpt-4o",
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      hasModelDirective: false,
+    });
+
+    expect(state.resetModelOverride).toBe(true);
+    expect(state.resetModelOverrideReason).toBe("disallowed");
+    expect(state.provider).toBe("openai");
+    expect(state.model).toBe("gpt-4o");
+  });
+
   it("preserves a locked disallowed override without resetting it", async () => {
     const cfg = {
       agents: {

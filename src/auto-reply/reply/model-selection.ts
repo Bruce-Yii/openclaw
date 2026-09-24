@@ -354,8 +354,13 @@ export async function createModelSelectionState(params: {
       }
     }
   }
+  // After a reset, the working selection must follow the stored entry back
+  // to the configured primary — for both stale and disallowed pins
+  // (#157377). A temporarily-unavailable pin keeps its selection so it can
+  // be re-evaluated after discovery recovers; that path never sets
+  // resetModelOverride.
   if (
-    staleDirectStoredOverride &&
+    resetModelOverride &&
     params.provider === directOverrideRef?.provider &&
     params.model === directOverrideRef.model
   ) {
